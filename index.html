@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Super Pixel Adventure</title>
+    <meta name="description" content="A Super Mario Bros-style 2D side-scrolling platformer game">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="gameCanvas"></canvas>
+        <div id="hud">
+            <div id="hud-left">
+                <span id="score-label">SCORE</span>
+                <span id="score-value">0</span>
+            </div>
+            <div id="hud-center">
+                <span id="stage-label">STAGE</span>
+                <span id="stage-value">1-1</span>
+            </div>
+            <div id="hud-right">
+                <span id="lives-label">LIVES</span>
+                <span id="lives-value">❤❤❤</span>
+            </div>
+        </div>
+        <div id="overlay" class="active">
+            <div id="title-screen">
+                <h1>SUPER PIXEL<br>ADVENTURE</h1>
+                <p class="blink">PRESS ENTER TO START</p>
+                <p class="controls-hint">← → Move &nbsp; SPACE Jump</p>
+            </div>
+        </div>
+        <div id="stage-clear-overlay" class="hidden">
+            <div id="stage-clear-content">
+                <h2>STAGE CLEAR!</h2>
+                <p id="clear-score"></p>
+                <p class="blink">PRESS ENTER FOR NEXT STAGE</p>
+            </div>
+        </div>
+        <div id="game-over-overlay" class="hidden">
+            <div id="game-over-content">
+                <h2>GAME OVER</h2>
+                <p id="final-score"></p>
+                <p class="blink">PRESS ENTER TO RETRY</p>
+            </div>
+        </div>
+        <div id="ending-overlay" class="hidden">
+            <div id="ending-content">
+                <h2>🎉 CONGRATULATIONS! 🎉</h2>
+                <p>You cleared all stages!</p>
+                <p id="ending-score"></p>
+                <p class="blink">PRESS ENTER TO PLAY AGAIN</p>
+            </div>
+        </div>
+    </div>
+    <script src="game.js"></script>
+</body>
+</html>
