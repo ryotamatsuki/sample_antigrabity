@@ -14,6 +14,10 @@
     const PLAYER_SPEED = 4.5;
     const PLAYER_JUMP = -12;
     const MAX_FALL = 12;
+    const TARGET_FPS = 60;
+    const TARGET_DT = 1000 / TARGET_FPS;
+    const COYOTE_FRAMES = 6;
+    const JUMP_BUFFER_FRAMES = 8;
 
     // ===== CANVAS SETUP =====
     const canvas = document.getElementById('gameCanvas');
@@ -48,17 +52,170 @@
     let frameCount = 0;
     let boss = null;
     let bossDefeated = false;
+    let lastTime = 0;
+    let dtScale = 1;
+
+    // ===== SOUND SYSTEM (Web Audio API) =====
+    let audioCtx = null;
+    function initAudio() {
+        if (!audioCtx) {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+    }
+
+    function playTone(freq, duration, type = 'square', volume = 0.15) {
+        if (!audioCtx) return;
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+        gain.gain.setValueAtTime(volume, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + duration);
+    }
+
+    function playNoise(duration, volume = 0.1) {
+        if (!audioCtx) return;
+        const bufferSize = audioCtx.sampleRate * duration;
+        const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+        const data = buffer.getChannelData(0);
+        for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+        const source = audioCtx.createBufferSource();
+        source.buffer = buffer;
+        const gain = audioCtx.createGain();
+        gain.gain.setValueAtTime(volume, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+        source.connect(gain);
+        gain.connect(audioCtx.destination);
+        source.start();
+    }
+
+    const sfx = {
+        jump() {
+            playTone(400, 0.12, 'square', 0.1);
+            playTone(600, 0.08, 'square', 0.08);
+        },
+        coin() {
+            playTone(1047, 0.08, 'square', 0.1);
+            setTimeout(() => playTone(1319, 0.12, 'square', 0.1), 60);
+        },
+        stomp() {
+            playTone(200, 0.1, 'square', 0.12);
+            playNoise(0.08, 0.08);
+        },
+        hit() {
+            playTone(150, 0.2, 'sawtooth', 0.12);
+            playTone(80, 0.25, 'square', 0.08);
+        },
+        bossHit() {
+            playTone(120, 0.15, 'sawtooth', 0.15);
+            playNoise(0.12, 0.12);
+            playTone(180, 0.1, 'square', 0.1);
+        },
+        bossDefeat() {
+            const t = audioCtx.currentTime;
+            [523, 659, 784, 1047].forEach((f, i) => {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = 'square';
+                osc.frequency.setValueAtTime(f, t + i * 0.12);
+                gain.gain.setValueAtTime(0.12, t + i * 0.12);
+                gain.gain.exponentialRampToValueAtTime(0.001, t + i * 0.12 + 0.3);
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.start(t + i * 0.12);
+                osc.stop(t + i * 0.12 + 0.3);
+            });
+            playNoise(0.4, 0.15);
+        },
+        stageClear() {
+            const t = audioCtx.currentTime;
+            [523, 659, 784, 1047, 1319].forEach((f, i) => {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = 'square';
+                osc.frequency.setValueAtTime(f, t + i * 0.1);
+                gain.gain.setValueAtTime(0.1, t + i * 0.1);
+                gain.gain.exponentialRampToValueAtTime(0.001, t + i * 0.1 + 0.25);
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.start(t + i * 0.1);
+                osc.stop(t + i * 0.1 + 0.25);
+            });
+        },
+        gameOver() {
+            const t = audioCtx.currentTime;
+            [440, 370, 311, 220].forEach((f, i) => {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(f, t + i * 0.2);
+                gain.gain.setValueAtTime(0.12, t + i * 0.2);
+                gain.gain.exponentialRampToValueAtTime(0.001, t + i * 0.2 + 0.35);
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.start(t + i * 0.2);
+                osc.stop(t + i * 0.2 + 0.35);
+            });
+        },
+        powerUp() {
+            const t = audioCtx.currentTime;
+            [523, 659, 784, 1047].forEach((f, i) => {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = 'square';
+                osc.frequency.setValueAtTime(f, t + i * 0.08);
+                gain.gain.setValueAtTime(0.1, t + i * 0.08);
+                gain.gain.exponentialRampToValueAtTime(0.001, t + i * 0.08 + 0.15);
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.start(t + i * 0.08);
+                osc.stop(t + i * 0.08 + 0.15);
+            });
+        },
+        blockBump() {
+            playTone(250, 0.06, 'square', 0.1);
+        },
+        brickBreak() {
+            playNoise(0.1, 0.12);
+            playTone(150, 0.08, 'square', 0.08);
+        },
+        mushroomSpawn() {
+            playTone(600, 0.1, 'square', 0.08);
+            setTimeout(() => playTone(800, 0.08, 'square', 0.06), 80);
+        },
+    };
 
     // ===== INPUT =====
     const keys = {};
+    let jumpBufferCounter = 0;
+    let jumpReleased = true;
+    const jumpKeys = ['Space', 'ArrowUp', 'KeyW'];
+
     window.addEventListener('keydown', e => {
         keys[e.code] = true;
-        if (e.code === 'Enter') handleEnter();
+        if (e.code === 'Enter') { initAudio(); handleEnter(); }
+        if (jumpKeys.includes(e.code)) {
+            jumpBufferCounter = JUMP_BUFFER_FRAMES;
+            jumpReleased = false;
+        }
         if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
             e.preventDefault();
         }
     });
-    window.addEventListener('keyup', e => { keys[e.code] = false; });
+    window.addEventListener('keyup', e => {
+        keys[e.code] = false;
+        // Variable jump: cut upward velocity when releasing jump key
+        if (jumpKeys.includes(e.code)) {
+            jumpReleased = true;
+            if (player.vy < PLAYER_JUMP * 0.4) {
+                player.vy *= 0.5;
+            }
+        }
+    });
 
     function handleEnter() {
         if (state === STATE.TITLE) {
@@ -73,9 +230,11 @@
     }
 
     // ===== PLAYER =====
+    const PLAYER_NORMAL_H = 30;
+    const PLAYER_POWERED_H = 42;
     let player = {
         x: 80, y: 300,
-        w: 24, h: 30,
+        w: 24, h: PLAYER_NORMAL_H,
         vx: 0, vy: 0,
         onGround: false,
         facing: 1,
@@ -83,10 +242,15 @@
         animTimer: 0,
         invincible: 0,
         dead: false,
+        coyoteCounter: 0,
+        wasOnGround: false,
+        powered: false,
     };
 
+    let mushrooms = [];  // Active mushroom items in the world
+
     // ===== STAGE DATA =====
-    // Tile legend: 0=air, 1=ground, 2=brick, 3=grass-top, 4=coin, 5=pipe-left, 6=pipe-right, 7=question-block, 9=goal
+    // Tile legend: 0=air, 1=ground, 2=brick, 3=grass-top, Q=?-block(4), 5=used-block
     // Enemy spawn: encoded separately
 
     const STAGES = [
@@ -105,10 +269,10 @@
                 '                                                                                                                                                           G',
                 '                                                                                                                                                           G',
                 '                        CCCCC                                                                                                                              G',
-                '                  BBB          BB                                         CCC                                                                              G',
+                '                  BQB          BB                                         CCC                                                                              G',
                 '                                                                    BBB                                                                                    G',
-                '           C                          BB   C  C  C                                      B  C  B                                                           G',
-                '         BBB          C         BBB            BBB       BB                                                     CC                                          G',
+                '           C                          BB   C  C  C                                      B  C  B                     Q                                      G',
+                '         BBB          C         BQB            BBB       BB                                                     CC                                          G',
                 '                    BBB                                       BBB             BBB                     BBB      BBBB                   BBBB                  G',
                 '                                                                                                                                                           G',
                 '                                                                                                                                                           G',
@@ -143,8 +307,8 @@
                 '                                                                                                                                                     G',
                 '              C                                                                                                                                      G',
                 '            BBBBB                                         CC                                                                                         G',
-                '                                                        BBBBBB                                                  CC                                   G',
-                '                          BBB                                         BB                                       BBBB                                  G',
+                '                                                        BQBBBB                                                  CC                                   G',
+                '                          BQB                                         BB                                       BBBB                                  G',
                 '     C              C                   BB                                      C     C                                      BB                      G',
                 '   BBB            BBB          BBB               C    C        BBB             BBB   BBB           BBB                                                G',
                 '                                                BBB  BBB                                                                           BBB               G',
@@ -185,7 +349,7 @@
                 '   BBBB                     BBB         C  C                               BBBBB              CC                                 BBBBB                                                                  G',
                 '                  BB                  BBBBBBB                                          BBB  BBBBBB                                              BB                                                      G',
                 '            C                                      BB           BBB                                        BB   C                          BB                                                           G',
-                '          BBB          BB                                                       C                               BBB           BB                      BBB                                                G',
+                '          BQB          BB                                                       C                               BQB           BB                      BBB                                                G',
                 '                              BBB           BB              B                 BBB       B          BBB                   BB              BB                                                              G',
                 '      BB        BB                    BB            BBB           BB                         BB                    BB              BBB                                                                   G',
                 '                       BB                                                           BB                                                        BB                                                        G',
@@ -234,6 +398,8 @@
         boss = null;
         bossDefeated = false;
 
+        mushrooms = [];
+
         for (let r = 0; r < mapHeight; r++) {
             tiles[r] = [];
             for (let c = 0; c < mapWidth; c++) {
@@ -242,6 +408,7 @@
                     case '1': tiles[r][c] = 1; break; // solid ground
                     case '3': tiles[r][c] = 3; break; // grass top
                     case 'B': tiles[r][c] = 2; break; // brick
+                    case 'Q': tiles[r][c] = 4; break; // ? block
                     case 'C': coins.push({ x: c * TILE + 8, y: r * TILE + 8, w: 16, h: 16, collected: false, bobOffset: Math.random() * Math.PI * 2 }); tiles[r][c] = 0; break;
                     case 'G': goalX = c * TILE; tiles[r][c] = 0; break;
                     default: tiles[r][c] = 0;
@@ -284,17 +451,17 @@
         if (!boss || !boss.alive) return;
 
         // Invincibility
-        if (boss.invincible > 0) boss.invincible--;
+        if (boss.invincible > 0) boss.invincible -= dtScale;
 
         // Face player
         boss.facing = player.x < boss.x ? -1 : 1;
 
         // Gravity
-        boss.vy += GRAVITY;
+        boss.vy += GRAVITY * dtScale;
         if (boss.vy > MAX_FALL) boss.vy = MAX_FALL;
 
         // Phase logic
-        boss.phaseTimer++;
+        boss.phaseTimer += dtScale;
 
         switch (boss.phase) {
             case 'idle':
@@ -320,7 +487,7 @@
                 break;
 
             case 'jump':
-                if (boss.phaseTimer === 1) {
+                if (boss.phaseTimer <= dtScale + 0.01) {
                     boss.vy = -14;
                     boss.vx = boss.facing * 3;
                 }
@@ -335,8 +502,10 @@
                 }
                 break;
 
-            case 'fireball':
-                if (boss.phaseTimer === 20 || boss.phaseTimer === 40 || boss.phaseTimer === 60) {
+            case 'fireball': {
+                const t = Math.floor(boss.phaseTimer);
+                const prev = Math.floor(boss.phaseTimer - dtScale);
+                if ((prev < 20 && t >= 20) || (prev < 40 && t >= 40) || (prev < 60 && t >= 60)) {
                     const dx = player.x - boss.x;
                     const dy = player.y - boss.y;
                     const dist = Math.sqrt(dx * dx + dy * dy) || 1;
@@ -355,15 +524,16 @@
                     boss.actionCooldown = 70 + Math.random() * 30;
                 }
                 break;
+            }
         }
 
         // Move
-        boss.x += boss.vx;
+        boss.x += boss.vx * dtScale;
         // Clamp to arena
         if (boss.x < boss.arenaLeft) { boss.x = boss.arenaLeft; boss.vx = 0; }
         if (boss.x + boss.w > boss.arenaRight) { boss.x = boss.arenaRight - boss.w; boss.vx = 0; }
 
-        boss.y += boss.vy;
+        boss.y += boss.vy * dtScale;
         boss.onGround = false;
         // Ground collision for boss
         const bLeft = Math.floor(boss.x / TILE);
@@ -379,7 +549,7 @@
         }
 
         // Animation
-        boss.animTimer++;
+        boss.animTimer += dtScale;
         if (boss.animTimer > 10) {
             boss.animTimer = 0;
             boss.animFrame = (boss.animFrame + 1) % 4;
@@ -395,6 +565,7 @@
                 score += 500;
                 triggerShake(6, 12);
                 spawnParticles(boss.x + boss.w / 2, boss.y, '#ff0000', 15, 5);
+                sfx.bossHit();
 
                 if (boss.hp <= 0) {
                     // Boss defeated!
@@ -406,6 +577,7 @@
                     spawnParticles(boss.x + boss.w / 2, boss.y + boss.h / 2, '#ff0000', 40, 8);
                     spawnParticles(boss.x + boss.w / 2, boss.y + boss.h / 2, '#ffaa00', 30, 7);
                     spawnParticles(boss.x + boss.w / 2, boss.y + boss.h / 2, '#ffff00', 20, 6);
+                    sfx.bossDefeat();
                 }
 
                 // Reset to idle
@@ -611,7 +783,7 @@
 
     function isSolid(col, row) {
         const t = getTile(col, row);
-        return t === 1 || t === 2 || t === 3;
+        return t === 1 || t === 2 || t === 3 || t === 4 || t === 5;
     }
 
     // ===== PARTICLES =====
@@ -634,10 +806,10 @@
     function updateParticles() {
         for (let i = particles.length - 1; i >= 0; i--) {
             const p = particles[i];
-            p.x += p.vx;
-            p.y += p.vy;
-            p.vy += 0.1;
-            p.life--;
+            p.x += p.vx * dtScale;
+            p.y += p.vy * dtScale;
+            p.vy += 0.1 * dtScale;
+            p.life -= dtScale;
             if (p.life <= 0) particles.splice(i, 1);
         }
     }
@@ -663,39 +835,54 @@
         if (player.dead) return;
 
         // Invincibility timer
-        if (player.invincible > 0) player.invincible--;
+        if (player.invincible > 0) player.invincible -= dtScale;
+
+        // Coyote time: track time since leaving ground
+        if (player.onGround) {
+            player.coyoteCounter = COYOTE_FRAMES;
+        } else {
+            player.coyoteCounter -= dtScale;
+        }
+
+        // Jump buffer countdown
+        if (jumpBufferCounter > 0) jumpBufferCounter -= dtScale;
 
         // Horizontal movement
         if (keys['ArrowLeft'] || keys['KeyA']) {
-            player.vx -= PLAYER_SPEED * 0.3;
+            player.vx -= PLAYER_SPEED * 0.3 * dtScale;
             player.facing = -1;
         }
         if (keys['ArrowRight'] || keys['KeyD']) {
-            player.vx += PLAYER_SPEED * 0.3;
+            player.vx += PLAYER_SPEED * 0.3 * dtScale;
             player.facing = 1;
         }
 
-        player.vx *= FRICTION;
+        player.vx *= Math.pow(FRICTION, dtScale);
         if (Math.abs(player.vx) > PLAYER_SPEED) player.vx = PLAYER_SPEED * Math.sign(player.vx);
         if (Math.abs(player.vx) < 0.1) player.vx = 0;
 
-        // Jump
-        if ((keys['Space'] || keys['ArrowUp'] || keys['KeyW']) && player.onGround) {
+        // Jump: supports coyote time + jump buffering
+        const canJump = player.onGround || player.coyoteCounter > 0;
+        if (jumpBufferCounter > 0 && canJump) {
             player.vy = PLAYER_JUMP;
             player.onGround = false;
+            player.coyoteCounter = 0;
+            jumpBufferCounter = 0;
             spawnParticles(player.x + player.w / 2, player.y + player.h, '#fff', 5, 2);
+            sfx.jump();
         }
 
         // Gravity
-        player.vy += GRAVITY;
+        player.vy += GRAVITY * dtScale;
         if (player.vy > MAX_FALL) player.vy = MAX_FALL;
 
         // Move X
-        player.x += player.vx;
+        player.x += player.vx * dtScale;
         resolveCollisionX(player);
 
         // Move Y
-        player.y += player.vy;
+        player.y += player.vy * dtScale;
+        player.wasOnGround = player.onGround;
         player.onGround = false;
         resolveCollisionY(player);
 
@@ -705,7 +892,7 @@
         }
 
         // Animation
-        player.animTimer++;
+        player.animTimer += dtScale;
         if (player.animTimer > 8) {
             player.animTimer = 0;
             player.animFrame = (player.animFrame + 1) % 4;
@@ -764,9 +951,143 @@
                     } else if (entity.vy < 0) {
                         entity.y = (r + 1) * TILE;
                         entity.vy = 0;
+                        // Player head-bump block interaction
+                        if (entity === player) {
+                            hitBlockFromBelow(c, r);
+                        }
                     }
                 }
             }
+        }
+    }
+
+    // ===== BLOCK INTERACTION =====
+    function hitBlockFromBelow(col, row) {
+        const t = getTile(col, row);
+        if (t === 4) {
+            // ? block: spawn mushroom, become used block
+            tiles[row][col] = 5;
+            spawnMushroom(col * TILE + 4, row * TILE - TILE);
+            triggerShake(2, 5);
+            sfx.mushroomSpawn();
+        } else if (t === 2 && player.powered) {
+            // Powered player breaks brick blocks
+            tiles[row][col] = 0;
+            triggerShake(3, 6);
+            sfx.brickBreak();
+            // Spawn debris particles
+            const bx = col * TILE + TILE / 2;
+            const by = row * TILE + TILE / 2;
+            for (let i = 0; i < 6; i++) {
+                const angle = -Math.PI / 2 + (Math.random() - 0.5) * Math.PI;
+                const speed = 3 + Math.random() * 4;
+                particles.push({
+                    x: bx, y: by,
+                    vx: Math.cos(angle) * speed,
+                    vy: Math.sin(angle) * speed - 3,
+                    life: 40 + Math.random() * 20,
+                    maxLife: 60,
+                    color: STAGES[currentStage].brickColor,
+                    size: 4 + Math.random() * 4,
+                });
+            }
+        } else if (t === 2 || t === 5) {
+            // Regular bump (not powered, or used block)
+            sfx.blockBump();
+        }
+    }
+
+    // ===== MUSHROOM =====
+    function spawnMushroom(x, y) {
+        mushrooms.push({
+            x, y, w: 24, h: 24,
+            vx: 2, vy: -4,
+            collected: false,
+            onGround: false,
+            spawnAnim: 16, // rise out of block animation frames
+        });
+    }
+
+    function updateMushrooms() {
+        for (let i = mushrooms.length - 1; i >= 0; i--) {
+            const m = mushrooms[i];
+            if (m.collected) continue;
+
+            // Spawn animation: rise up out of block
+            if (m.spawnAnim > 0) {
+                m.spawnAnim -= dtScale;
+                continue;
+            }
+
+            // Gravity
+            m.vy += GRAVITY * dtScale;
+            if (m.vy > MAX_FALL) m.vy = MAX_FALL;
+
+            // Move horizontally
+            m.x += m.vx * dtScale;
+            // Wall collision
+            const mLeft = Math.floor(m.x / TILE);
+            const mRight = Math.floor((m.x + m.w - 1) / TILE);
+            const mTop = Math.floor(m.y / TILE);
+            const mBot = Math.floor((m.y + m.h - 1) / TILE);
+            for (let r = mTop; r <= mBot; r++) {
+                if (m.vx > 0 && isSolid(mRight, r)) { m.x = mRight * TILE - m.w; m.vx = -m.vx; }
+                if (m.vx < 0 && isSolid(mLeft, r)) { m.x = (mLeft + 1) * TILE; m.vx = -m.vx; }
+            }
+
+            // Move vertically
+            m.y += m.vy * dtScale;
+            m.onGround = false;
+            const mLeft2 = Math.floor(m.x / TILE);
+            const mRight2 = Math.floor((m.x + m.w - 1) / TILE);
+            const mBot2 = Math.floor((m.y + m.h - 1) / TILE);
+            for (let c = mLeft2; c <= mRight2; c++) {
+                if (isSolid(c, mBot2)) {
+                    m.y = mBot2 * TILE - m.h;
+                    m.vy = 0;
+                    m.onGround = true;
+                }
+            }
+
+            // Edge detection
+            if (m.onGround) {
+                const checkX = m.vx > 0 ? m.x + m.w + 2 : m.x - 2;
+                const checkCol = Math.floor(checkX / TILE);
+                const checkRow = Math.floor((m.y + m.h + 2) / TILE);
+                // Don't reverse at ledges - mushrooms slide off edges like in Mario
+            }
+
+            // Fell off screen
+            if (m.y > mapHeight * TILE + 100) {
+                mushrooms.splice(i, 1);
+                continue;
+            }
+
+            // Collect by player
+            if (!player.dead && aabb(player, m)) {
+                m.collected = true;
+                powerUpPlayer();
+                spawnParticles(m.x + m.w / 2, m.y + m.h / 2, '#ff4444', 12, 4);
+                mushrooms.splice(i, 1);
+            }
+        }
+    }
+
+    function powerUpPlayer() {
+        if (!player.powered) {
+            player.powered = true;
+            // Grow taller
+            const oldH = player.h;
+            player.h = PLAYER_POWERED_H;
+            player.y -= (PLAYER_POWERED_H - oldH); // Adjust so feet stay in place
+            player.invincible = 30; // Brief flash
+            score += 200;
+            sfx.powerUp();
+            spawnParticles(player.x + player.w / 2, player.y + player.h / 2, '#ffff00', 15, 5);
+        } else {
+            // Already powered: bonus score
+            score += 500;
+            sfx.powerUp();
         }
     }
 
@@ -777,10 +1098,10 @@
 
             switch (e.type) {
                 case 'slime':
-                    e.x += e.vx;
-                    e.vy += GRAVITY;
+                    e.x += e.vx * dtScale;
+                    e.vy += GRAVITY * dtScale;
                     if (e.vy > MAX_FALL) e.vy = MAX_FALL;
-                    e.y += e.vy;
+                    e.y += e.vy * dtScale;
                     resolveCollisionX(e);
                     resolveCollisionY(e);
                     // Edge detection: reverse at ledges
@@ -788,8 +1109,8 @@
                     break;
 
                 case 'flyingEye':
-                    e.x += e.vx;
-                    e.floatPhase += 0.04;
+                    e.x += e.vx * dtScale;
+                    e.floatPhase += 0.04 * dtScale;
                     e.y = e.baseY + Math.sin(e.floatPhase) * 40;
                     // Reverse at walls
                     const colL = Math.floor(e.x / TILE);
@@ -801,9 +1122,9 @@
 
                 case 'shell':
                     if (e.shellMode) {
-                        e.x += e.shellVx;
-                        e.vy += GRAVITY;
-                        e.y += e.vy;
+                        e.x += e.shellVx * dtScale;
+                        e.vy += GRAVITY * dtScale;
+                        e.y += e.vy * dtScale;
                         // Shell kills other enemies
                         if (e.shellVx !== 0) {
                             enemies.forEach(other => {
@@ -822,10 +1143,10 @@
                         if (e.shellVx > 0 && isSolid(sColR, sRow)) e.shellVx = -e.shellVx;
                         if (e.shellVx < 0 && isSolid(sCol, sRow)) e.shellVx = -e.shellVx;
                     } else {
-                        e.x += e.vx;
-                        e.vy += GRAVITY;
+                        e.x += e.vx * dtScale;
+                        e.vy += GRAVITY * dtScale;
                         if (e.vy > MAX_FALL) e.vy = MAX_FALL;
-                        e.y += e.vy;
+                        e.y += e.vy * dtScale;
                         resolveCollisionX(e);
                         resolveCollisionY(e);
                         edgeDetect(e);
@@ -833,7 +1154,7 @@
                     break;
 
                 case 'fireSkull':
-                    e.fireTimer++;
+                    e.fireTimer += dtScale;
                     if (e.fireTimer >= e.fireInterval) {
                         e.fireTimer = 0;
                         // Fire in player direction
@@ -857,9 +1178,9 @@
                             e.vx = (distX > 0 ? 1 : -1) * e.dashSpeed;
                         }
                     } else {
-                        e.x += e.vx;
-                        e.vy += GRAVITY * 0.3;
-                        e.y += e.vy;
+                        e.x += e.vx * dtScale;
+                        e.vy += GRAVITY * 0.3 * dtScale;
+                        e.y += e.vy * dtScale;
                         // Reset if off screen
                         if (e.x < camera.x - 200 || e.x > camera.x + CANVAS_W + 200 || e.y > mapHeight * TILE + 200) {
                             e.x = e.startX;
@@ -887,22 +1208,31 @@
                         player.vy = PLAYER_JUMP * 0.6;
                         score += 100;
                         spawnParticles(e.x + e.w / 2, e.y, '#20c060', 8, 3);
+                        sfx.stomp();
                     } else if (e.type === 'shell' && e.shellMode) {
-                        // Kick shell
-                        e.shellVx = player.facing * 7;
+                        // Kick shell: direction based on stomp position relative to shell center
+                        const playerCenterX = player.x + player.w / 2;
+                        const shellCenterX = e.x + e.w / 2;
+                        const kickDir = playerCenterX < shellCenterX ? 1 : -1;
+                        e.shellVx = kickDir * 7;
                         player.vy = PLAYER_JUMP * 0.5;
                         score += 50;
+                        sfx.stomp();
                     } else {
                         killEnemy(e);
                         player.vy = PLAYER_JUMP * 0.6;
                         score += 100;
                     }
                 } else {
-                    // Side or bottom collision = damage
+                    // Side or bottom collision
                     if (e.type === 'shell' && e.shellMode && e.shellVx === 0) {
-                        // Stationary shell: kick it
-                        e.shellVx = player.facing * 7;
+                        // Stationary shell: kick it based on player position
+                        const playerCenterX = player.x + player.w / 2;
+                        const shellCenterX = e.x + e.w / 2;
+                        const kickDir = playerCenterX < shellCenterX ? 1 : -1;
+                        e.shellVx = kickDir * 7;
                         score += 50;
+                        sfx.stomp();
                     } else {
                         playerHit();
                     }
@@ -913,9 +1243,9 @@
         // Fireballs
         for (let i = fireballs.length - 1; i >= 0; i--) {
             const fb = fireballs[i];
-            fb.x += fb.vx;
-            fb.y += fb.vy;
-            fb.life--;
+            fb.x += fb.vx * dtScale;
+            fb.y += fb.vy * dtScale;
+            fb.life -= dtScale;
             // Hit player
             if (!player.dead && player.invincible <= 0 && aabb(player, fb)) {
                 playerHit();
@@ -946,14 +1276,28 @@
         e.alive = false;
         spawnParticles(e.x + e.w / 2, e.y + e.h / 2, e.color, 12, 4);
         triggerShake(3, 8);
+        sfx.stomp();
     }
 
     function playerHit() {
         if (player.invincible > 0) return;
+
+        if (player.powered) {
+            // Lose power instead of life
+            player.powered = false;
+            player.h = PLAYER_NORMAL_H;
+            player.invincible = 90;
+            triggerShake(4, 10);
+            spawnParticles(player.x + player.w / 2, player.y + player.h / 2, '#ffaa00', 10, 4);
+            sfx.hit();
+            return;
+        }
+
         lives--;
         player.invincible = 90;
         triggerShake(6, 15);
         spawnParticles(player.x + player.w / 2, player.y + player.h / 2, '#ff4444', 15, 5);
+        sfx.hit();
 
         if (lives <= 0) {
             playerDie();
@@ -969,6 +1313,7 @@
                 state = STATE.OVER;
                 dom.overOverlay.classList.remove('hidden');
                 dom.finalScore.textContent = `FINAL SCORE: ${score}`;
+                sfx.gameOver();
             } else {
                 respawnPlayer();
             }
@@ -983,6 +1328,8 @@
         player.dead = false;
         player.invincible = 90;
         player.onGround = false;
+        player.powered = false;
+        player.h = PLAYER_NORMAL_H;
         camera.x = 0;
     }
 
@@ -994,6 +1341,7 @@
                 c.collected = true;
                 score += 50;
                 spawnParticles(c.x + c.w / 2, c.y + c.h / 2, '#ffd700', 8, 3);
+                sfx.coin();
             }
         });
     }
@@ -1002,8 +1350,9 @@
     function updateCamera() {
         const targetX = player.x - CANVAS_W / 3;
         const targetY = player.y - CANVAS_H / 2;
-        camera.x += (targetX - camera.x) * 0.1;
-        camera.y += (targetY - camera.y) * 0.1;
+        const lerpFactor = 1 - Math.pow(0.9, dtScale);
+        camera.x += (targetX - camera.x) * lerpFactor;
+        camera.y += (targetY - camera.y) * lerpFactor;
 
         // Clamp
         camera.x = Math.max(0, Math.min(camera.x, mapWidth * TILE - CANVAS_W));
@@ -1130,6 +1479,35 @@
                     // Highlights
                     ctx.fillStyle = 'rgba(255,255,255,0.15)';
                     ctx.fillRect(x + 1, y + 1, TILE - 2, 2);
+                } else if (tile === 4) {
+                    // ? Block (active)
+                    const bob = Math.sin(frameCount * 0.06) * 2;
+                    ctx.fillStyle = '#E8A820';
+                    ctx.fillRect(x, y + bob * 0.3, TILE, TILE);
+                    // Border
+                    ctx.strokeStyle = '#B07818';
+                    ctx.lineWidth = 2;
+                    ctx.strokeRect(x + 1, y + 1 + bob * 0.3, TILE - 2, TILE - 2);
+                    // Highlight
+                    ctx.fillStyle = 'rgba(255,255,255,0.25)';
+                    ctx.fillRect(x + 2, y + 2 + bob * 0.3, TILE - 4, 3);
+                    // ? symbol
+                    ctx.fillStyle = '#fff';
+                    ctx.font = 'bold 18px "Press Start 2P"';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText('?', x + TILE / 2, y + TILE / 2 + bob * 0.3);
+                    ctx.textBaseline = 'alphabetic';
+                } else if (tile === 5) {
+                    // Used block (spent ? block)
+                    ctx.fillStyle = '#7a6a5a';
+                    ctx.fillRect(x, y, TILE, TILE);
+                    ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+                    ctx.lineWidth = 1;
+                    ctx.strokeRect(x + 1, y + 1, TILE - 2, TILE - 2);
+                    // Dot pattern
+                    ctx.fillStyle = 'rgba(0,0,0,0.15)';
+                    ctx.fillRect(x + TILE / 2 - 2, y + TILE / 2 - 2, 4, 4);
                 }
             }
         }
@@ -1165,6 +1543,49 @@
         });
     }
 
+    function drawMushrooms() {
+        mushrooms.forEach(m => {
+            if (m.collected) return;
+            const x = m.x - camera.x;
+            const y = m.y - camera.y;
+
+            // Mushroom cap (red dome)
+            ctx.fillStyle = '#E02020';
+            ctx.beginPath();
+            ctx.ellipse(x + m.w / 2, y + 8, m.w / 2 + 2, 12, 0, Math.PI, 0);
+            ctx.fill();
+
+            // White spots on cap
+            ctx.fillStyle = '#FFFFFF';
+            ctx.beginPath();
+            ctx.arc(x + 6, y + 2, 3, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(x + 18, y + 2, 3, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(x + 12, y - 2, 2.5, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Stem
+            ctx.fillStyle = '#F5E0C0';
+            ctx.fillRect(x + 5, y + 8, m.w - 10, m.h - 8);
+
+            // Eyes
+            ctx.fillStyle = '#000';
+            ctx.fillRect(x + 7, y + 12, 3, 3);
+            ctx.fillRect(x + 14, y + 12, 3, 3);
+
+            // Subtle glow
+            ctx.globalAlpha = 0.2 + Math.sin(frameCount * 0.08) * 0.1;
+            ctx.fillStyle = '#ff4444';
+            ctx.beginPath();
+            ctx.arc(x + m.w / 2, y + m.h / 2, m.w / 2 + 4, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.globalAlpha = 1;
+        });
+    }
+
     function drawPlayer() {
         if (player.dead) return;
         if (player.invincible > 0 && Math.floor(player.invincible / 4) % 2 === 0) return;
@@ -1172,39 +1593,86 @@
         const x = player.x - camera.x;
         const y = player.y - camera.y;
         const f = player.facing;
+        const pw = player.powered;
 
         ctx.save();
         ctx.translate(x + player.w / 2, y + player.h / 2);
         ctx.scale(f, 1);
 
-        // Body
-        ctx.fillStyle = '#FF4444';
-        ctx.fillRect(-player.w / 2, -player.h / 2 + 8, player.w, player.h - 12);
+        if (pw) {
+            // === POWERED PLAYER (taller) ===
+            // Body (white suit)
+            ctx.fillStyle = '#FFFFFF';
+            ctx.fillRect(-player.w / 2, -player.h / 2 + 10, player.w, player.h - 16);
+            // Red overalls
+            ctx.fillStyle = '#FF4444';
+            ctx.fillRect(-player.w / 2, -player.h / 2 + 22, player.w, player.h - 28);
 
-        // Head
-        ctx.fillStyle = '#FFCC88';
-        ctx.fillRect(-player.w / 2 + 2, -player.h / 2, player.w - 4, 12);
+            // Head
+            ctx.fillStyle = '#FFCC88';
+            ctx.fillRect(-player.w / 2 + 2, -player.h / 2, player.w - 4, 14);
 
-        // Hat
-        ctx.fillStyle = '#FF2222';
-        ctx.fillRect(-player.w / 2, -player.h / 2 - 2, player.w, 6);
-        ctx.fillRect(-player.w / 2 + player.w - 4, -player.h / 2 - 2, 6, 6);
+            // Hat (red with white stripe)
+            ctx.fillStyle = '#FF2222';
+            ctx.fillRect(-player.w / 2, -player.h / 2 - 3, player.w, 7);
+            ctx.fillRect(-player.w / 2 + player.w - 4, -player.h / 2 - 3, 6, 7);
+            ctx.fillStyle = '#FFFFFF';
+            ctx.fillRect(-player.w / 2 + 2, -player.h / 2 - 1, player.w - 6, 2);
 
-        // Eye
-        ctx.fillStyle = '#000';
-        ctx.fillRect(2, -player.h / 2 + 5, 3, 3);
+            // Eye
+            ctx.fillStyle = '#000';
+            ctx.fillRect(2, -player.h / 2 + 6, 3, 3);
 
-        // Legs (animated)
-        ctx.fillStyle = '#4444CC';
-        const legOffset = player.onGround && Math.abs(player.vx) > 0.5
-            ? Math.sin(player.animFrame * Math.PI / 2) * 3 : 0;
-        ctx.fillRect(-player.w / 2 + 2, player.h / 2 - 6, 8, 6 + legOffset);
-        ctx.fillRect(player.w / 2 - 10, player.h / 2 - 6, 8, 6 - legOffset);
+            // Power glow
+            ctx.globalAlpha = 0.15 + Math.sin(frameCount * 0.1) * 0.1;
+            ctx.fillStyle = '#ffff00';
+            ctx.beginPath();
+            ctx.arc(0, 0, player.w * 0.8, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.globalAlpha = 1;
 
-        // Shoes
-        ctx.fillStyle = '#8B4513';
-        ctx.fillRect(-player.w / 2 + 1, player.h / 2 - 2 + legOffset, 10, 4);
-        ctx.fillRect(player.w / 2 - 11, player.h / 2 - 2 - legOffset, 10, 4);
+            // Legs (animated)
+            ctx.fillStyle = '#4444CC';
+            const legOffset = player.onGround && Math.abs(player.vx) > 0.5
+                ? Math.sin(player.animFrame * Math.PI / 2) * 4 : 0;
+            ctx.fillRect(-player.w / 2 + 2, player.h / 2 - 8, 8, 8 + legOffset);
+            ctx.fillRect(player.w / 2 - 10, player.h / 2 - 8, 8, 8 - legOffset);
+
+            // Shoes
+            ctx.fillStyle = '#8B4513';
+            ctx.fillRect(-player.w / 2 + 1, player.h / 2 - 2 + legOffset, 10, 4);
+            ctx.fillRect(player.w / 2 - 11, player.h / 2 - 2 - legOffset, 10, 4);
+        } else {
+            // === NORMAL PLAYER ===
+            // Body
+            ctx.fillStyle = '#FF4444';
+            ctx.fillRect(-player.w / 2, -player.h / 2 + 8, player.w, player.h - 12);
+
+            // Head
+            ctx.fillStyle = '#FFCC88';
+            ctx.fillRect(-player.w / 2 + 2, -player.h / 2, player.w - 4, 12);
+
+            // Hat
+            ctx.fillStyle = '#FF2222';
+            ctx.fillRect(-player.w / 2, -player.h / 2 - 2, player.w, 6);
+            ctx.fillRect(-player.w / 2 + player.w - 4, -player.h / 2 - 2, 6, 6);
+
+            // Eye
+            ctx.fillStyle = '#000';
+            ctx.fillRect(2, -player.h / 2 + 5, 3, 3);
+
+            // Legs (animated)
+            ctx.fillStyle = '#4444CC';
+            const legOffset = player.onGround && Math.abs(player.vx) > 0.5
+                ? Math.sin(player.animFrame * Math.PI / 2) * 3 : 0;
+            ctx.fillRect(-player.w / 2 + 2, player.h / 2 - 6, 8, 6 + legOffset);
+            ctx.fillRect(player.w / 2 - 10, player.h / 2 - 6, 8, 6 - legOffset);
+
+            // Shoes
+            ctx.fillStyle = '#8B4513';
+            ctx.fillRect(-player.w / 2 + 1, player.h / 2 - 2 + legOffset, 10, 4);
+            ctx.fillRect(player.w / 2 - 11, player.h / 2 - 2 - legOffset, 10, 4);
+        }
 
         ctx.restore();
     }
@@ -1488,6 +1956,7 @@
         drawBackground();
         drawTiles();
         drawCoins();
+        drawMushrooms();
         drawGoal();
         drawEnemies();
         drawBoss();
@@ -1499,6 +1968,7 @@
 
     // ===== GAME FLOW =====
     function startGame() {
+        initAudio();
         state = STATE.PLAYING;
         dom.overlay.classList.add('hidden');
         score = 0;
@@ -1513,6 +1983,7 @@
         dom.clearOverlay.classList.remove('hidden');
         dom.clearScore.textContent = `SCORE: ${score}`;
         spawnParticles(player.x, player.y, '#FFD700', 30, 6);
+        sfx.stageClear();
     }
 
     function nextStage() {
@@ -1543,7 +2014,15 @@
     }
 
     // ===== GAME LOOP =====
-    function gameLoop() {
+    function gameLoop(timestamp) {
+        // Delta time calculation
+        if (lastTime === 0) lastTime = timestamp;
+        const rawDt = timestamp - lastTime;
+        lastTime = timestamp;
+        // Cap dt to prevent spiral of death (e.g. tab switch)
+        const dt = Math.min(rawDt, TARGET_DT * 3);
+        dtScale = dt / TARGET_DT;
+
         frameCount++;
 
         if (state === STATE.PLAYING) {
@@ -1551,6 +2030,7 @@
             updateEnemies();
             updateBoss();
             updateCoins();
+            updateMushrooms();
             updateCamera();
             updateParticles();
             updateHUD();
@@ -1562,5 +2042,5 @@
 
     // ===== START =====
     loadStage(0);
-    gameLoop();
+    requestAnimationFrame(gameLoop);
 })();
