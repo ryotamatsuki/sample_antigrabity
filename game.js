@@ -1195,8 +1195,18 @@
 
             // Collision with player
             if (e.alive && !player.dead && player.invincible <= 0 && aabb(player, e)) {
+                // Stationary shell: always kickable from ANY direction (like Mario)
+                if (e.type === 'shell' && e.shellMode && e.shellVx === 0) {
+                    const playerCenterX = player.x + player.w / 2;
+                    const shellCenterX = e.x + e.w / 2;
+                    const kickDir = playerCenterX < shellCenterX ? 1 : -1;
+                    e.shellVx = kickDir * 7;
+                    player.vy = PLAYER_JUMP * 0.5;
+                    score += 50;
+                    sfx.stomp();
+                }
                 // Stomping: player falling onto enemy from above
-                if (player.vy > 0 && player.y + player.h - e.y < 16) {
+                else if (player.vy > 0 && player.y + player.h - e.y < 16) {
                     if (e.type === 'fireSkull') {
                         // Can't stomp fire skull
                         playerHit();
@@ -1209,33 +1219,14 @@
                         score += 100;
                         spawnParticles(e.x + e.w / 2, e.y, '#20c060', 8, 3);
                         sfx.stomp();
-                    } else if (e.type === 'shell' && e.shellMode) {
-                        // Kick shell: direction based on stomp position relative to shell center
-                        const playerCenterX = player.x + player.w / 2;
-                        const shellCenterX = e.x + e.w / 2;
-                        const kickDir = playerCenterX < shellCenterX ? 1 : -1;
-                        e.shellVx = kickDir * 7;
-                        player.vy = PLAYER_JUMP * 0.5;
-                        score += 50;
-                        sfx.stomp();
                     } else {
                         killEnemy(e);
                         player.vy = PLAYER_JUMP * 0.6;
                         score += 100;
                     }
                 } else {
-                    // Side or bottom collision
-                    if (e.type === 'shell' && e.shellMode && e.shellVx === 0) {
-                        // Stationary shell: kick it based on player position
-                        const playerCenterX = player.x + player.w / 2;
-                        const shellCenterX = e.x + e.w / 2;
-                        const kickDir = playerCenterX < shellCenterX ? 1 : -1;
-                        e.shellVx = kickDir * 7;
-                        score += 50;
-                        sfx.stomp();
-                    } else {
-                        playerHit();
-                    }
+                    // Side/bottom collision with non-shell or moving shell = damage
+                    playerHit();
                 }
             }
         });
